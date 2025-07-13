@@ -1,0 +1,92 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  name          String?
+  password      String
+  role          UserRole  @default(USER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  detections    Detection[]
+  forumPosts    ForumPost[]
+  forumReplies  ForumReply[]
+}
+
+enum UserRole {
+  USER
+  EXPERT
+  ADMIN
+}
+
+model PlantDisease {
+  id          String      @id @default(uuid())
+  name        String
+  description String
+  symptoms    String[]
+  plantType   String
+  treatments  Treatment[]
+  detections  Detection[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+model Treatment {
+  id          String      @id @default(uuid())
+  diseaseId   String
+  disease     PlantDisease @relation(fields: [diseaseId], references: [id])
+  name        String
+  description String
+  steps       String[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+enum TreatmentType {
+  ORGANIC
+  CHEMICAL
+  PREVENTIVE
+}
+
+model Detection {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id])
+  diseaseId   String
+  disease     PlantDisease @relation(fields: [diseaseId], references: [id])
+  imageUrl    String
+  confidence  Float
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+model ForumPost {
+  id          String    @id @default(uuid())
+  title       String
+  content     String
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  replies     ForumReply[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model ForumReply {
+  id          String    @id @default(uuid())
+  content     String
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  postId      String
+  post        ForumPost @relation(fields: [postId], references: [id])
+  upvotes     Int       @default(0)
+  downvotes   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+} 
