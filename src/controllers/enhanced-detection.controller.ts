@@ -23,7 +23,6 @@ interface EnhancedDetectionResult {
   reliability: 'HIGH' | 'MEDIUM' | 'LOW';
   validationScore: number;
   recommendations: string[];
-  top5Predictions: any[];
 }
 
 // Load multiple models for ensemble prediction
@@ -164,30 +163,17 @@ const ensemblePrediction = async (tensors: tf.Tensor[]): Promise<EnhancedDetecti
     averageProbabilities[i] /= allPredictions.length;
   }
 
-  // Get top predictions (excluding very low confidence predictions)
+  // Get top predictions
   const topPredictions = averageProbabilities
     .map((prob, index) => ({ classIndex: index, confidence: prob }))
-    .filter(pred => pred.confidence > 0.0001) // Filter out predictions less than 0.01%
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 5);
 
-  // Create top 5 predictions with basic information only
-  const top5Predictions = topPredictions
-    .map((pred, idx) => {
-      const diseaseInfo = getDiseaseByClassIndex(pred.classIndex);
-      return {
-        rank: idx + 1,
-        classId: pred.classIndex,
-        className: diseaseInfo?.name || `Unknown Class ${pred.classIndex}`,
-        confidence: pred.confidence,
-        percentage: (pred.confidence * 100).toFixed(2) + '%'
-      };
-    });
-
   // Debug: Log top predictions
   console.log('Top 5 predictions:');
-  top5Predictions.forEach((pred) => {
-    console.log(`${pred.rank}. Class ${pred.classId}: ${pred.className} (${pred.percentage})`);
+  topPredictions.forEach((pred, idx) => {
+    const diseaseInfo = getDiseaseByClassIndex(pred.classIndex);
+    console.log(`${idx + 1}. Class ${pred.classIndex}: ${diseaseInfo?.name || 'Unknown'} (${(pred.confidence * 100).toFixed(2)}%)`);
   });
 
   // Calculate validation metrics
@@ -209,8 +195,7 @@ const ensemblePrediction = async (tensors: tf.Tensor[]): Promise<EnhancedDetecti
     confidence: topPredictions[0].confidence,
     reliability,
     validationScore,
-    recommendations,
-    top5Predictions
+    recommendations
   };
 };
 
@@ -341,23 +326,23 @@ export const enhancedDetectDisease = async (req: Request, res: Response) => {
     // Response with enhanced information
     res.json({
       status: 'success',
-      // data: {
-      //   detection,
-      //   disease: {
-      //     id: disease.id,
-      //     name: disease.name,
-      //     description: disease.description,
-      //     plantType: disease.plantType
-      //   },
-      //   enhancedResult: {
-      //     primaryPrediction: enhancedResult.primaryResult,
-      //     confidence: `${(enhancedResult.confidence * 100).toFixed(2)}%`,
-      //     reliability: enhancedResult.reliability,
-      //     validationScore: `${enhancedResult.validationScore.toFixed(1)}%`,
-      //     top5Predictions: enhancedResult.top5Predictions
-      //   }
-      // }
-      data: enhancedResult.top5Predictions
+      data: {
+        detection,
+        disease,
+        enhancedResult: {
+          primaryPrediction: enhancedResult.primaryResult,
+          alternativePredictions: enhancedResult.secondaryResults,
+          confidence: `${(enhancedResult.confidence * 100).toFixed(2)}%`,
+          reliability: enhancedResult.reliability,
+          validationScore: `${enhancedResult.validationScore.toFixed(1)}%`,
+          recommendations: enhancedResult.recommendations
+        },
+        treatmentPlan: {
+          immediate: disease.treatments[0] || null,
+          preventive: generatePreventiveMeasures(disease.plantType),
+          monitoring: generateMonitoringPlan(diseaseInfo.name)
+        }
+      }
     });
 
   } catch (error) {
@@ -416,56 +401,6 @@ const generateMonitoringPlan = (diseaseName: string): string[] => {
   ];
 };
 
-// Helper endpoint to get detailed information about a specific prediction class
-export const getPredictionDetails = async (req: Request, res: Response) => {
-  try {
-    const { classId } = req.params;
-    const classIndex = parseInt(classId);
-    
-    if (isNaN(classIndex) || classIndex < 0) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid class ID provided'
-      });
-    }
-    
-    const diseaseInfo = getDiseaseByClassIndex(classIndex);
-    
-    if (!diseaseInfo) {
-      return res.status(404).json({
-        status: 'error',
-        message: `No disease information found for class ID ${classIndex}`
-      });
-    }
-    
-    // Get detailed treatment recommendations
-    const detailedTreatments = await TreatmentRecommendationService.generateTreatmentPlan(
-      diseaseInfo.name,
-      diseaseInfo.plantType,
-      1.0, // High confidence for details endpoint
-      'HIGH' // High reliability for details endpoint
-    );
-    
-    res.json({
-      status: 'success',
-      data: {
-        classId: classIndex,
-        diseaseInfo,
-        detailedTreatments,
-        preventiveMeasures: generatePreventiveMeasures(diseaseInfo.plantType),
-        monitoringPlan: generateMonitoringPlan(diseaseInfo.name)
-      }
-    });
-    
-  } catch (error) {
-    console.error('Error getting prediction details:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Error retrieving prediction details'
-    });
-  }
-};
-
 // Batch analysis for multiple images
 export const batchAnalysis = async (req: Request, res: Response) => {
   try {
@@ -486,10 +421,8 @@ export const batchAnalysis = async (req: Request, res: Response) => {
       
       results.push({
         filename: file.filename,
-        primaryPrediction: enhancedResult.primaryResult,
-        confidence: `${(enhancedResult.confidence * 100).toFixed(2)}%`,
-        reliability: enhancedResult.reliability,
-        top5Predictions: enhancedResult.top5Predictions
+        result: enhancedResult,
+        diseaseInfo: getDiseaseByClassIndex(enhancedResult.primaryResult.classIndex)
       });
 
       // Clean up tensors
@@ -520,8 +453,8 @@ const generateBatchSummary = (results: any[]) => {
   const reliabilityCount: { [key: string]: number } = {};
   
   results.forEach(result => {
-    const disease = result.primaryPrediction?.className || 'Unknown';
-    const reliability = result.reliability;
+    const disease = result.diseaseInfo?.name || 'Unknown';
+    const reliability = result.result.reliability;
     
     diseaseCount[disease] = (diseaseCount[disease] || 0) + 1;
     reliabilityCount[reliability] = (reliabilityCount[reliability] || 0) + 1;
@@ -530,7 +463,7 @@ const generateBatchSummary = (results: any[]) => {
   return {
     diseasesDetected: diseaseCount,
     reliabilityDistribution: reliabilityCount,
-    averageConfidence: results.reduce((sum, r) => sum + r.primaryPrediction.confidence, 0) / results.length,
-    highConfidenceCount: results.filter(r => r.reliability === 'HIGH').length
+    averageConfidence: results.reduce((sum, r) => sum + r.result.confidence, 0) / results.length,
+    highConfidenceCount: results.filter(r => r.result.reliability === 'HIGH').length
   };
 };

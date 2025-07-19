@@ -2,7 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { enhancedDetectDisease, batchAnalysis, getPredictionDetails } from '../controllers/enhanced-detection.controller';
+import { enhancedDetectDisease, batchAnalysis } from '../controllers/enhanced-detection.controller';
 import { authenticateToken } from '../middlewares/auth.middleware';
 
 const router = express.Router();
@@ -49,9 +49,6 @@ router.post('/enhanced-detect', authenticateToken, upload.single('image') as any
 
 // Batch analysis endpoint
 router.post('/batch-analysis', authenticateToken, upload.array('images', 10) as any, batchAnalysis);
-
-// Get detailed information about a specific prediction class
-router.get('/prediction-details/:classId', authenticateToken, getPredictionDetails);
 
 // Get confidence threshold settings
 router.get('/confidence-settings', authenticateToken, (req, res) => {

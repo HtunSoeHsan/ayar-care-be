@@ -104,7 +104,7 @@ export class ModelTrainer {
 
     // Shuffle data
     tf.util.shuffle(allData);
-    console.log("alldata::", allData)
+
     // Split into training and validation sets
     const splitIndex = Math.floor(allData.length * 0.8);
     return {
