@@ -6,8 +6,7 @@ import path from 'path';
 
 // Import routes
 import authRoutes from './routes/auth.routes';
-import enhancedDetectionRoutes from './routes/enhanced-detection.routes';
-import detectionRoutes from './routes/detection.routes';
+import enhancedDetectionRoutes from './routes/detection.routes';
 import forumRoutes from './routes/forum.routes';
 import weatherRoutes from './routes/weather.routes';
 import debugRoutes from './routes/debug.routes';
@@ -28,10 +27,9 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // Routes
 app.use('/api/auth', authRoutes);
 // app.use('/api/diseases', diseaseRoutes);
-app.use('/api/detections', detectionRoutes);
 app.use('/api/forum', forumRoutes);
 app.use('/api/weather', weatherRoutes);
-app.use('/api/enhanced-detection', enhancedDetectionRoutes);
+app.use('/api/detections', enhancedDetectionRoutes);
 app.use('/api/debug', debugRoutes);
 
 // Error handling middleware

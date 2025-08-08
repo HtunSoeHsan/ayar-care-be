@@ -39,5 +39,6 @@ models/
 
 # Temporary files
 tmp/
-temp/
+temp/ 
+training_data/
 uploads/

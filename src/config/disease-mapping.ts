@@ -1,3 +1,5 @@
+import { PlantDisease } from "@/types";
+
 interface DiseaseMapping {
   classIndex: number;
   name: string;
@@ -13,7 +15,7 @@ interface DiseaseMapping {
 
 // This mapping matches your actual training data structure
 // Based on the folders found in /home/hsh/Documents/ME/ayar-care-be/training_data
-export const diseaseMapping: DiseaseMapping[] = [
+export const diseaseMapping: PlantDisease[] = [
   {
     classIndex: 0,
     name: 'Apple Scab',

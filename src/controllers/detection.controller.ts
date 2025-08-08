@@ -5,56 +5,198 @@ import sharp from 'sharp';
 import path from 'path';
 import fs from 'fs';
 import { getDiseaseByClassIndex } from '../config/disease-mapping';
+import { TreatmentRecommendationService } from '../services/treatment-recommendation.service';
+import { ModelInspector } from '../utils/model-inspector';
+import { get } from 'http';
+import { PlantDisease } from '@/types';
 
 const prisma = new PrismaClient();
 
-// Load the model
-let model: tf.LayersModel | null = null;
-
-// Use absolute path to project directory
-const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
-const MODEL_DIR = path.join(PROJECT_ROOT, 'models');
-const MODEL_PATH = path.join(MODEL_DIR, 'plant_disease_model');
-
-// Ensure model directory exists
-if (!fs.existsSync(MODEL_DIR)) {
-  fs.mkdirSync(MODEL_DIR, { recursive: true });
+interface DetectionResult {
+  classIndex: number;
+  confidence: number;
+  className: string;
 }
 
-const loadModel = async () => {
-  if (!model) {
+interface EnhancedDetectionResult {
+  primaryResult: DetectionResult;
+  secondaryResults: DetectionResult[];
+  confidence: number;
+  reliability: 'HIGH' | 'MEDIUM' | 'LOW';
+  validationScore: number;
+  recommendations: string[];
+}
+
+// Load multiple models for ensemble prediction
+let models: tf.LayersModel[] = [];
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+const MODEL_DIR = path.join(PROJECT_ROOT, 'models');
+
+// Image preprocessing configurations - adjusted to match your model's requirements
+const IMAGE_CONFIGS = [
+  { size: 224, normalize: 255.0 } // Only use 224x224 since that's what your model expects
+];
+
+// Load multiple models for ensemble prediction
+const loadModels = async () => {
+  if (models.length === 0) {
     try {
-      // Check if model files exist
-      const modelJsonPath = path.join(MODEL_PATH, 'model.json');
-      if (!fs.existsSync(modelJsonPath)) {
-        throw new Error(`Model not found at ${modelJsonPath}. Please train the model first.`);
+      const modelPaths = [
+        path.join(MODEL_DIR, 'plant_disease_model', 'model.json'),
+        // Add more model paths here if you have multiple trained models
+      ];
+
+      for (const modelPath of modelPaths) {
+        if (fs.existsSync(modelPath)) {
+          const model = await tf.loadLayersModel(`file://${modelPath}`);
+          models.push(model);
+          console.log(`Model loaded successfully from: ${modelPath}`);
+          
+          // Inspect the model to understand its structure
+          try {
+            const modelInfo = await ModelInspector.inspectModel(modelPath);
+            console.log(`Model has ${modelInfo.numClasses} output classes`);
+          } catch (inspectionError) {
+            console.warn('Could not inspect model:', inspectionError);
+          }
+        }
       }
-      
-      model = await tf.loadLayersModel(`file://${modelJsonPath}`);
-      console.log('Model loaded successfully from:', modelJsonPath);
+
+      if (models.length === 0) {
+        throw new Error('No models found. Please train at least one model first.');
+      }
     } catch (error) {
-      console.error('Error loading model:', error);
-      throw new Error('Failed to load the disease detection model. Please ensure the model is trained and available.');
+      console.error('Error loading models:', error);
+      throw new Error('Failed to load disease detection models.');
     }
   }
-  return model;
+  return models;
 };
 
-const preprocessImage = async (imagePath: string) => {
-  // Resize and normalize image
+// Enhanced image preprocessing with multiple techniques
+const preprocessImageMultiple = async (imagePath: string): Promise<tf.Tensor[]> => {
+  const tensors: tf.Tensor[] = [];
+  
+  // Use the first (and only) config - 224x224
+  const config = IMAGE_CONFIGS[0];
+  
+  // Basic preprocessing
   const imageBuffer = await sharp(imagePath)
-    .resize(224, 224) // Standard input size for many CNN models
+    .resize(config.size, config.size)
     .toBuffer();
 
-  // Convert to tensor and normalize
-  const tensor = tf.node.decodeImage(imageBuffer)
+  let tensor = tf.node.decodeImage(imageBuffer)
     .expandDims(0)
-    .div(255.0);
+    .div(config.normalize);
 
-  return tensor;
+  tensors.push(tensor);
+
+  // Add augmented versions for more robust prediction
+  const augmentedTensors = await createAugmentedImages(tensor);
+  tensors.push(...augmentedTensors);
+
+  return tensors;
 };
 
-export const detectDisease = async (req: Request, res: Response) => {
+// Create augmented images for better prediction
+const createAugmentedImages = async (tensor: tf.Tensor): Promise<tf.Tensor[]> => {
+  const augmentedTensors: tf.Tensor[] = [];
+
+  try {
+    // Horizontal flip
+    const flipped = tf.image.flipLeftRight(tensor as tf.Tensor4D);
+    augmentedTensors.push(flipped);
+
+    // Brightness adjustment - simple manual implementation
+    const brightened = tensor.add(0.1).clipByValue(0, 1);
+    augmentedTensors.push(brightened);
+
+    // Contrast adjustment - simple manual implementation
+    const mean = tensor.mean();
+    const contrasted = tensor.sub(mean).mul(1.1).add(mean).clipByValue(0, 1);
+    augmentedTensors.push(contrasted);
+
+    // Create a slightly darker version
+    const darkened = tensor.mul(0.9).clipByValue(0, 1);
+    augmentedTensors.push(darkened);
+
+  } catch (error) {
+    console.warn('Some augmentation failed, using original tensor:', error);
+    // If augmentation fails, just return the original tensor
+    augmentedTensors.push(tensor);
+  }
+
+  return augmentedTensors;
+};
+
+// Ensemble prediction with multiple models and image variations
+const detectedResult = async (tensors: tf.Tensor[]): Promise<PlantDisease[]> => {
+  const models = await loadModels();
+  const allPredictions: number[][] = [];
+
+  // Get predictions from all models and all image variations
+  for (const model of models) {
+    for (const tensor of tensors) {
+      const prediction = await model.predict(tensor) as tf.Tensor;
+      const probabilities = Array.from(await prediction.data());
+      allPredictions.push(probabilities);
+      prediction.dispose();
+    }
+  }
+
+  // Calculate ensemble results
+  const numClasses = allPredictions[0].length;
+  const averageProbabilities = new Array(numClasses).fill(0);
+  
+  // Average all predictions
+  for (const prediction of allPredictions) {
+    for (let i = 0; i < numClasses; i++) {
+      averageProbabilities[i] += prediction[i];
+    }
+  }
+  
+  for (let i = 0; i < numClasses; i++) {
+    averageProbabilities[i] /= allPredictions.length;
+  }
+
+  // Get top predictions
+  const topPredictions = averageProbabilities
+    .map((prob, index) => ({ classIndex: index, confidence: prob }))
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, 5);
+
+  const top5 = topPredictions.filter(pred => pred.confidence * 100 > 0.1); // Filter out low confidence predictions
+  const top5Result: PlantDisease[] = top5.map((pred) => {
+    const diseaseInfo = getDiseaseByClassIndex(pred.classIndex) || {
+      name: 'Unknown',
+      description: '',
+      symptoms: [],
+      plantType: '',
+      treatments: [],
+      detection: { confidence: 0 }
+    };
+    return {
+      classIndex: pred.classIndex,
+      name: diseaseInfo.name,
+      description: diseaseInfo.description,
+      symptoms: diseaseInfo.symptoms,
+      plantType: diseaseInfo.plantType,
+      treatments: diseaseInfo.treatments,
+      detection: {
+        confidence: `${(pred.confidence * 100).toFixed(2)}`, // Convert to percentage
+        imageUrl: '', // You can add the image URL if needed
+        detectedAt: new Date()
+      }
+    };
+  });
+
+  return top5Result;
+};
+
+// Enhanced disease detection endpoint
+export const enhancedDetectDisease = async (req: Request, res: Response) => {
+  const tensors: tf.Tensor[] = [];
+  
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -66,154 +208,27 @@ export const detectDisease = async (req: Request, res: Response) => {
     const userId = (req as any).user.userId;
     const imagePath = req.file.path;
 
-    // Preprocess image
-    const tensor = await preprocessImage(imagePath);
+    // Preprocess image with multiple techniques
+    const preprocessedTensors = await preprocessImageMultiple(imagePath);
+    tensors.push(...preprocessedTensors);
 
-    try {
-      // Load model and make prediction
-      const model = await loadModel();
-      const prediction = await model.predict(tensor) as tf.Tensor;
-      const probabilities = await prediction.data();
-      console.log("probabilities", probabilities);
-
-      // Get the class with highest probability
-      const maxIndex = probabilities.indexOf(Math.max(...probabilities));
-      console.log("maxIndex", maxIndex);
-      const confidence = probabilities[maxIndex];
-      console.log("confidence", confidence);
-
-      // Get disease information from mapping
-      const diseaseInfo = getDiseaseByClassIndex(maxIndex);
-
-      if (!diseaseInfo) {
-        // If disease not found in mapping, create a record with unknown disease
-        const unknownDisease = await prisma.plantDisease.create({
-          data: {
-            name: `Unknown Disease (Class ${maxIndex})`,
-            description: 'Disease class detected but not yet identified in the database.',
-            symptoms: ['Unknown symptoms'],
-            plantType: 'Unknown',
-            treatments: {
-              create: {
-                name: 'General Treatment',
-                description: 'Please consult with a plant expert for proper diagnosis and treatment.',
-                steps: ['Monitor plant health', 'Isolate affected plant', 'Consult with plant expert']
-              }
-            }
-          },
-          include: {
-            treatments: true
-          }
-        });
-
-        // Save detection record with unknown disease
-        const detection = await prisma.detection.create({
-          data: {
-            userId,
-            diseaseId: unknownDisease.id,
-            imageUrl: path.basename(imagePath),
-            confidence: confidence
-          }
-        });
-
-        return res.json({
-          status: 'success',
-          data: {
-            detection,
-            disease: unknownDisease,
-            confidence,
-            note: 'This disease class is not yet identified in our database. Please consult with a plant expert.'
-          }
-        });
-      }
-
-      // Find or create disease in database
-      let disease = await prisma.plantDisease.findFirst({
-        where: { name: diseaseInfo.name },
-        include: { treatments: true }
-      });
-
-      if (!disease) {
-        // Create disease if it doesn't exist
-        disease = await prisma.plantDisease.create({
-          data: {
-            name: diseaseInfo.name,
-            description: diseaseInfo.description,
-            symptoms: diseaseInfo.symptoms,
-            plantType: diseaseInfo.plantType,
-            treatments: {
-              create: diseaseInfo.treatments
-            }
-          },
-          include: {
-            treatments: true
-          }
-        });
-      }
-
-      // Save detection record
-      const detection = await prisma.detection.create({
-        data: {
-          userId,
-          diseaseId: disease.id,
-          imageUrl: path.basename(imagePath),
-          confidence: confidence
-        }
-      });
-
-      res.json({
-        status: 'success',
-        data: {
-          detection,
-          disease,
-          confidence
-        }
-      });
-    } catch (error) {
-      console.error('Model prediction error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: error instanceof Error ? error.message : 'Error processing image'
-      });
-    } finally {
-      // Clean up tensor
-      tensor.dispose();
-    }
-  } catch (error) {
-    console.error('Detection error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Error processing image'
-    });
-  }
-};
-
-export const getDetectionHistory = async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user.userId;
-
-    const detections = await prisma.detection.findMany({
-      where: { userId },
-      include: {
-        disease: {
-          include: {
-            treatments: true
-          }
-        }
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    });
-
+    // Perform ensemble prediction
+    const results = await detectedResult(preprocessedTensors);
+    
     res.json({
       status: 'success',
-      data: { detections }
+      data: results
     });
+
   } catch (error) {
+    console.error('Enhanced detection error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Error fetching detection history'
+      message: 'Error processing enhanced detection',
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
+  } finally {
+    // Clean up all tensors
+    tensors.forEach(tensor => tensor.dispose());
   }
-}; 
+};

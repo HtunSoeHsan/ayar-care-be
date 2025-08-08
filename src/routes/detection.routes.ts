@@ -1,37 +1,50 @@
 import express from 'express';
 import multer from 'multer';
-import { detectDisease, getDetectionHistory } from '../controllers/detection.controller';
+import path from 'path';
+import fs from 'fs';
+import { enhancedDetectDisease } from '../controllers/detection.controller';
 import { authenticateToken } from '../middlewares/auth.middleware';
 
 const router = express.Router();
 
-// Configure multer for image upload
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, '../../uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Enhanced multer configuration with validation
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/');
+    cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
+    cb(null, `plant-${uniqueSuffix}${path.extname(file.originalname)}`);
   }
 });
+
+// File filter for images only
+const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  
+  if (allowedMimeTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only JPEG, PNG, and WebP images are allowed.'));
+  }
+};
 
 const upload = multer({
   storage,
+  fileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'));
-    }
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 10 // Maximum 10 files for batch processing
   }
 });
 
-// Routes
-router.post('/detect', authenticateToken, upload.single('image') as any, detectDisease);
-router.get('/history', authenticateToken, getDetectionHistory);
+// Enhanced single image detection endpoint
+router.post('/detect', authenticateToken, upload.single('image') as any, enhancedDetectDisease);
 
-export default router; 
+export default router;
