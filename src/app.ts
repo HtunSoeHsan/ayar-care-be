@@ -1,8 +1,9 @@
 import express from 'express';
+import session from 'express-session';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { PrismaClient } from '@prisma/client';
 import path from 'path';
+import { connectDatabase } from './config/database';
 
 // Import routes
 import authRoutes from './routes/auth.routes';
@@ -10,17 +11,21 @@ import enhancedDetectionRoutes from './routes/detection.routes';
 import forumRoutes from './routes/forum.routes';
 import weatherRoutes from './routes/weather.routes';
 import debugRoutes from './routes/debug.routes';
+import plantCareRoutes from './routes/plant-care.routes';
+import plantCollectionRoutes from './routes/plant-collection.routes';
 
 // Import passport (you must have this file)
-import './config/passport'; // Initializes Passport strategies
 import passport from 'passport';
+import './config/passport'; // Initializes Passport strategies
 
 // Load environment variables
 dotenv.config();
 
 // Initialize Express app
 const app = express();
-const prisma = new PrismaClient();
+
+// Initialize database connection
+connectDatabase();
 
 // Middleware
 app.use(cors({
@@ -36,22 +41,20 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Session middleware (required for Passport OAuth flow)
-app.use(
-  require('express-session')({
-    secret: process.env.SESSION_SECRET || 'your-session-secret-key',
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: process.env.NODE_ENV === 'production', // HTTPS only in prod
-      httpOnly: true,
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    },
-  })
-);
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-session-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production', // HTTPS only in prod
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+  },
+}));
 
 // Passport initialization
-app.use(passport.initialize());
-app.use(passport.session()); // Optional: only needed if you keep sessions
+app.use(passport.initialize() as any);
+app.use(passport.session() as any); // Optional: only needed if you keep sessions
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -59,6 +62,8 @@ app.use('/api/forum', forumRoutes);
 app.use('/api/weather', weatherRoutes);
 app.use('/api/detections', enhancedDetectionRoutes);
 app.use('/api/debug', debugRoutes);
+app.use('/api/plant-care', plantCareRoutes);
+app.use('/api/plant-collection', plantCollectionRoutes);
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -93,9 +98,8 @@ process.on('SIGINT', async () => {
   server.close(() => {
     console.log('❌ HTTP server closed');
   });
-  await prisma.$disconnect();
-  console.log('🔌 Prisma disconnected');
+  // MongoDB connection will be handled by the database config
   process.exit(0);
 });
 
-export { app, prisma };
+export { app };

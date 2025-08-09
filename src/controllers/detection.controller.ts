@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
 import * as tf from '@tensorflow/tfjs-node';
 import sharp from 'sharp';
 import path from 'path';
@@ -8,9 +7,7 @@ import { getDiseaseByClassIndex } from '../config/disease-mapping';
 import { TreatmentRecommendationService } from '../services/treatment-recommendation.service';
 import { ModelInspector } from '../utils/model-inspector';
 import { get } from 'http';
-import { PlantDisease } from '@/types';
-
-const prisma = new PrismaClient();
+import { PlantDisease } from '../types';
 
 interface DetectionResult {
   classIndex: number;
@@ -177,11 +174,7 @@ const detectedResult = async (tensors: tf.Tensor[]): Promise<PlantDisease[]> => 
     };
     return {
       classIndex: pred.classIndex,
-      name: diseaseInfo.name,
-      description: diseaseInfo.description,
-      symptoms: diseaseInfo.symptoms,
-      plantType: diseaseInfo.plantType,
-      treatments: diseaseInfo.treatments,
+      ...diseaseInfo,
       detection: {
         confidence: `${(pred.confidence * 100).toFixed(2)}`, // Convert to percentage
         imageUrl: '', // You can add the image URL if needed

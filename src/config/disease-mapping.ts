@@ -1,4 +1,4 @@
-import { PlantDisease } from "@/types";
+import { PlantDisease } from "../types";
 
 interface DiseaseMapping {
   classIndex: number;
@@ -285,6 +285,6 @@ export const diseaseMapping: PlantDisease[] = [
 ];
 
 // Helper function to get disease info by class index
-export function getDiseaseByClassIndex(classIndex: number): DiseaseMapping | undefined {
+export function getDiseaseByClassIndex(classIndex: number): PlantDisease | undefined {
   return diseaseMapping.find(disease => disease.classIndex === classIndex);
 }

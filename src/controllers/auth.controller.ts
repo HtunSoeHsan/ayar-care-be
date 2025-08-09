@@ -1,18 +1,15 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { serialize } from 'cookie';
-const prisma = new PrismaClient();
+import { User } from '../models';
 
 export const register = async (req: Request, res: Response) => {
   try {
     const { email, password, name } = req.body;
 
     // Check if user already exists
-    const existingUser = await prisma.user.findUnique({
-      where: { email }
-    });
+    const existingUser = await User.findOne({ email });
 
     if (existingUser) {
       return res.status(400).json({
@@ -25,17 +22,15 @@ export const register = async (req: Request, res: Response) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create user
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        name
-      }
+    const user = await User.create({
+      email,
+      password: hashedPassword,
+      name
     });
 
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id },
+      { userId: user._id },
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: '24h' }
     );
@@ -44,7 +39,7 @@ export const register = async (req: Request, res: Response) => {
       status: 'success',
       data: {
         user: {
-          id: user.id,
+          id: user._id,
           email: user.email,
           name: user.name
         },
@@ -64,9 +59,7 @@ export const login = async (req: Request, res: Response) => {
     const { email, password } = req.body;
 
     // Find user
-    const user = await prisma.user.findUnique({
-      where: { email }
-    });
+    const user = await User.findOne({ email });
 
     if (!user) {
       return res.status(401).json({
@@ -87,7 +80,7 @@ export const login = async (req: Request, res: Response) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id },
+      { userId: user._id },
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: '24h' }
     );
@@ -96,7 +89,7 @@ export const login = async (req: Request, res: Response) => {
       status: 'success',
       data: {
         user: {
-          id: user.id,
+          id: user._id,
           email: user.email,
           name: user.name
         },
@@ -113,7 +106,7 @@ export const login = async (req: Request, res: Response) => {
 
 export const googleAuth = async (req: Request, res: Response) => {
     const token = jwt.sign(
-      { userId: (req.user as any).id },
+      { userId: (req.user as any)._id },
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: '24h' }
     );
@@ -135,16 +128,7 @@ export const getProfile = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.userId;
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        createdAt: true
-      }
-    });
+    const user = await User.findById(userId).select('email name role createdAt');
 
     if (!user) {
       return res.status(404).json({
@@ -155,7 +139,15 @@ export const getProfile = async (req: Request, res: Response) => {
 
     res.json({
       status: 'success',
-      data: { user }
+      data: { 
+        user: {
+          id: user!._id,
+          email: user!.email,
+          name: user!.name,
+          role: user!.role,
+          createdAt: user!.createdAt
+        }
+      }
     });
   } catch (error) {
     res.status(500).json({
@@ -170,24 +162,23 @@ export const updateProfile = async (req: Request, res: Response) => {
     const userId = (req as any).user.userId;
     const { name, email } = req.body;
 
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: {
-        name,
-        email
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        createdAt: true
-      }
-    });
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { name, email },
+      { new: true }
+    ).select('email name role createdAt');
 
     res.json({
       status: 'success',
-      data: { user }
+      data: { 
+        user: {
+          id: user!._id,
+          email: user!.email,
+          name: user!.name,
+          role: user!.role,
+          createdAt: user!.createdAt
+        }
+      }
     });
   } catch (error) {
     res.status(500).json({

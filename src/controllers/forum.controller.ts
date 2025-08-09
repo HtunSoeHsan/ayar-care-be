@@ -1,28 +1,20 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { ForumPost, ForumReply } from '../models';
 
 export const createPost = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.userId;
     const { title, content } = req.body;
 
-    const post = await prisma.forumPost.create({
-      data: {
-        title,
-        content,
-        userId
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true
-          }
-        }
-      }
+    const post = await ForumPost.create({
+      title,
+      content,
+      userId
+    });
+
+    await post.populate({
+      path: 'userId',
+      select: 'name email'
     });
 
     res.status(201).json({
@@ -39,35 +31,33 @@ export const createPost = async (req: Request, res: Response) => {
 
 export const getPosts = async (req: Request, res: Response) => {
   try {
-    const posts = await prisma.forumPost.findMany({
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true
-          }
-        },
-        replies: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true
-              }
-            }
-          }
-        }
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    });
+    const posts = await ForumPost.find()
+      .populate({
+        path: 'userId',
+        select: 'name email'
+      })
+      .sort({ createdAt: -1 });
+
+    // Get replies for each post
+    const postsWithReplies = await Promise.all(
+      posts.map(async (post) => {
+        const replies = await ForumReply.find({ postId: post._id })
+          .populate({
+            path: 'userId',
+            select: 'name email'
+          })
+          .sort({ createdAt: 1 });
+        
+        return {
+          ...post.toObject(),
+          replies
+        };
+      })
+    );
 
     res.json({
       status: 'success',
-      data: { posts }
+      data: { posts: postsWithReplies }
     });
   } catch (error) {
     res.status(500).json({
@@ -81,32 +71,11 @@ export const getPost = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
-    const post = await prisma.forumPost.findUnique({
-      where: { id },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true
-          }
-        },
-        replies: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true
-              }
-            }
-          },
-          orderBy: {
-            createdAt: 'asc'
-          }
-        }
-      }
-    });
+    const post = await ForumPost.findById(id)
+      .populate({
+        path: 'userId',
+        select: 'name email'
+      });
 
     if (!post) {
       return res.status(404).json({
@@ -115,9 +84,21 @@ export const getPost = async (req: Request, res: Response) => {
       });
     }
 
+    const replies = await ForumReply.find({ postId: id })
+      .populate({
+        path: 'userId',
+        select: 'name email'
+      })
+      .sort({ createdAt: 1 });
+
+    const postWithReplies = {
+      ...post.toObject(),
+      replies
+    };
+
     res.json({
       status: 'success',
-      data: { post }
+      data: { post: postWithReplies }
     });
   } catch (error) {
     res.status(500).json({
@@ -133,21 +114,15 @@ export const createReply = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { content } = req.body;
 
-    const reply = await prisma.forumReply.create({
-      data: {
-        content,
-        userId,
-        postId: id
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true
-          }
-        }
-      }
+    const reply = await ForumReply.create({
+      content,
+      userId,
+      postId: id
+    });
+
+    await reply.populate({
+      path: 'userId',
+      select: 'name email'
     });
 
     res.status(201).json({
@@ -167,9 +142,7 @@ export const voteReply = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { voteType } = req.body; // 'up' or 'down'
 
-    const reply = await prisma.forumReply.findUnique({
-      where: { id }
-    });
+    const reply = await ForumReply.findById(id);
 
     if (!reply) {
       return res.status(404).json({
@@ -178,13 +151,13 @@ export const voteReply = async (req: Request, res: Response) => {
       });
     }
 
-    const updatedReply = await prisma.forumReply.update({
-      where: { id },
-      data: {
-        upvotes: voteType === 'up' ? reply.upvotes + 1 : reply.upvotes,
-        downvotes: voteType === 'down' ? reply.downvotes + 1 : reply.downvotes
-      }
-    });
+    if (voteType === 'up') {
+      reply.upvotes += 1;
+    } else if (voteType === 'down') {
+      reply.downvotes += 1;
+    }
+
+    const updatedReply = await reply.save();
 
     res.json({
       status: 'success',
