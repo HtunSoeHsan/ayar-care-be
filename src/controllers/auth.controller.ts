@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-
+import { serialize } from 'cookie';
 const prisma = new PrismaClient();
 
 export const register = async (req: Request, res: Response) => {
@@ -110,6 +110,26 @@ export const login = async (req: Request, res: Response) => {
     });
   }
 };
+
+export const googleAuth = async (req: Request, res: Response) => {
+    const token = jwt.sign(
+      { userId: (req.user as any).id },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '24h' }
+    );
+
+     const cookie = serialize('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production', // HTTPS in production
+      sameSite: 'strict',
+      maxAge: 24 * 60 * 60, // 24 hours
+      path: '/',
+    });
+
+    res.setHeader('Set-Cookie', cookie);
+    res.redirect(`${process.env.FRONTEND_URL}`);
+  }
+
 
 export const getProfile = async (req: Request, res: Response) => {
   try {
